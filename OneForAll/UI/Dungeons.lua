@@ -805,7 +805,15 @@ local function createDungeonPanel(parent)
   -- and the Bosses & Loot / Quests switch.
   if detailBanner then OrnateFrame(detailBanner, detailBanner, 18, 4, "OVERLAY", 2) end
   local back=UI.GoldButton(detail,L["Dungeons"],112,24,ASSET_ROOT.."icon_back",12); back:SetPoint("TOPLEFT",8,-74)
-  back:SetScript("OnClick",function() detail:Hide(); browse:Show() end)
+  -- A page opened from another tab (Hunter Pets: UI.SetDungeonReturn) shows that tab's name on the back button, which
+  -- then leads back there; leaving the page any other way makes it the normal "Dungeons" button again.
+  local backTo
+  back:SetScript("OnClick",function()
+    if backTo then local go=backTo.go; backTo=nil; if go then go() end; return end
+    detail:Hide(); browse:Show()
+  end)
+  detail:HookScript("OnHide",function() backTo=nil end)
+  UI.SetDungeonReturn=function(label, go) backTo={label=label, go=go}; back:SetLabel(label) end
   -- ht9 (user 30.10.): the band over the full width again (ht8 had made it as narrow as the list), a 1 px line
   local dband=CreateFrame("Frame",nil,detail); dband:SetPoint("TOPLEFT",8,-8); dband:SetSize(FULL_W,58)
   local dbandBg=makeTexture(dband,"BACKGROUND",0.045,0.045,0.058,0.96); dbandBg:SetPoint("TOPLEFT",1,-1); dbandBg:SetPoint("BOTTOMRIGHT",-1,1)
@@ -825,6 +833,8 @@ local function createDungeonPanel(parent)
   local keyBtn=UI.GoldButton(brow,L["Key"],110,26,nil,13); keyBtn:SetPoint("RIGHT",-14,0); keyBtn:Hide()
   local mapBtn=UI.GoldButton(brow,L["Map"],84,26,ASSET_ROOT.."icon_map",13,true); -- a real button here (user 31.10.)
   mapBtn:SetPoint("RIGHT",bossesBtn,"LEFT",-8,0); mapBtn:Hide() -- 8 px between all head buttons (user 31.10.)
+  -- tameable beasts inside the dungeon (only shown when there are any): the rightmost head button
+  local petsBtn=UI.GoldButton(brow,L["Hunter Pets"],110,26,nil,13); petsBtn:Hide()
 
   -- Rounded card background with an automatic border colour (lighter than
   -- the fill); keeps the SetColorTexture() calls of the list code working.
@@ -1706,6 +1716,43 @@ local function createDungeonPanel(parent)
     return "open"
   end
   -- Map: the dungeon map (UI\DungeonMap.lua, data from Forever Simple World Map)
+  -- The beasts a hunter can tame inside the dungeon (FLT.DungeonPets, UI/HunterPets.lua), with the ability ranks
+  -- they teach. A click opens the beast's page in Hunter Pets, whose Back arrow leads back here.
+  local function renderPets(d)
+    local viewKey="pets:"..d.key
+    local view=showView(viewKey)
+    if view then return end
+    view=newView(viewKey)
+    local list=FLT.DungeonPets and FLT.DungeonPets(d.name) or {}
+    local sf=FLT.SkinBlizz(CreateFrame("ScrollFrame",nil,view,"UIPanelScrollFrameTemplate")); sf:SetPoint("TOPLEFT",8,-8); sf:SetPoint("BOTTOMRIGHT",-30,8)
+    local W=FULL_W-70
+    local child=CreateFrame("Frame",nil,sf); child:SetSize(W,1); sf:SetScrollChild(child)
+    UI.AutoHideScrollBar(sf)
+    for i,p in ipairs(list) do
+      local row=CreateFrame("Button",nil,child); row:SetSize(W,32); row:SetPoint("TOPLEFT",0,-2-(i-1)*35)
+      UI.CardRow(row)
+      local ic=row:CreateTexture(nil,"ARTWORK"); ic:SetSize(24,24); ic:SetPoint("LEFT",6,0); FLT.SetTex(ic,p.icon)
+      local n=dynText(row,"GameFontHighlight"); n:SetPoint("LEFT",40,0); n:SetWidth(260); n:SetJustifyH("LEFT"); n:SetWordWrap(false)
+      n:SetText(p.name); n:SetTextColor(FLT.SkinC(unpack(p.color)))
+      local lv=dynText(row,"GameFontHighlightSmall"); lv:SetPoint("LEFT",310,0); lv:SetWidth(120); lv:SetJustifyH("LEFT")
+      lv:SetText(string.format(L["level %s"],tostring(p.level or "?"))); lv:SetTextColor(FLT.SkinC(0.84,0.81,0.74))
+      local fam=dynText(row,"GameFontHighlightSmall"); fam:SetPoint("LEFT",440,0); fam:SetWidth(140); fam:SetJustifyH("LEFT")
+      fam:SetText(p.family and L[p.family] or ""); fam:SetTextColor(FLT.SkinC(0.84,0.81,0.74))
+      local parts={}
+      for _,t in ipairs(p.teaches) do -- the ability's icon (cut like the item icons), its name and rank
+        parts[#parts+1]=(t.icon and ("|T"..t.icon..":16:16:0:0:64:64:5:59:5:59|t ") or "")..L[t.name].." "..tostring(t.rank or "?")
+      end
+      local te=dynText(row,"GameFontHighlightSmall"); te:SetPoint("LEFT",590,0); te:SetWidth(W-600); te:SetJustifyH("LEFT"); te:SetWordWrap(false)
+      te:SetText(table.concat(parts,"   ")); te:SetTextColor(FLT.SkinC(0.45,1,0.45))
+      row:SetScript("OnClick",function()
+        if UI.OpenPet then UI.OpenPet(p.key,function() if FLT.OpenPanel then FLT:OpenPanel("dungeons") end end) end
+      end)
+      row:SetScript("OnEnter",function(self) GameTooltip:SetOwner(self,"ANCHOR_CURSOR"); GameTooltip:AddLine(L["Click to open the pet"],0.8,0.8,0.8); GameTooltip:Show() end)
+      row:SetScript("OnLeave",function() GameTooltip:Hide() end)
+    end
+    child:SetHeight(math.max(1,#list*35+4))
+  end
+
   local function renderMap(d)
     local viewKey="map:"..d.key
     local view=showView(viewKey)
@@ -1965,19 +2012,26 @@ local function createDungeonPanel(parent)
     else
       dmeta:SetText("|cff"..hex(lr,lg,lb)..string.format(L["LV %s"],tostring(d.level)).."|r"..sep.."|cffd9d4c7"..zoneText.."|r"..sep.."|cff"..hex(sr,sg,sb)..L[sideName].."|r"..(d.betaNew and (sep.."|cff66f080"..L["New in Forever"].."|r") or ""))
     end
-    back:SetLabel(L[d.raid and N"Raids" or N"Dungeons"])
+    back:SetLabel(backTo and backTo.label or L[d.raid and N"Raids" or N"Dungeons"])
     keyBtn:SetLabel(L[d.raid and N"Attunement" or N"Key"])
     dmeta:SetTextColor(FLT.SkinC(0.85,0.83,0.78))
     local hasKeys=dungeonKeys(d)~=nil
     if not hasKeys and mode=="key" then mode="bosses" end
     keyBtn:SetShown(hasKeys)
-    questsBtn:ClearAllPoints(); bossesBtn:ClearAllPoints()
-    questsBtn:SetPoint("RIGHT",hasKeys and -132 or -14,0); bossesBtn:SetPoint("RIGHT",hasKeys and -260 or -142,0)
+    -- Hunter Pets (when the dungeon has tameable beasts) is the rightmost button, the others move left of it
+    local hasPets=FLT.DungeonPets~=nil and #FLT.DungeonPets(d.name)>0
+    if not hasPets and mode=="pets" then mode="bosses" end
+    local off=hasPets and ((petsBtn:GetWidth() or 110)+8) or 0 -- the button grows with a longer text (French, Spanish)
+    petsBtn:SetShown(hasPets)
+    petsBtn:ClearAllPoints(); petsBtn:SetPoint("RIGHT",-14,0)
+    questsBtn:ClearAllPoints(); bossesBtn:ClearAllPoints(); keyBtn:ClearAllPoints()
+    keyBtn:SetPoint("RIGHT",-14-off,0)
+    questsBtn:SetPoint("RIGHT",(hasKeys and -132 or -14)-off,0); bossesBtn:SetPoint("RIGHT",(hasKeys and -260 or -142)-off,0)
     local hasMap=FLT.DUNGEON_MAPS and FLT.DUNGEON_MAPS[d.name] and UI.CreateDungeonMap and true or false
     if not hasMap and mode=="map" then mode="bosses" end
     mapBtn:SetShown(hasMap)
-    if mode=="quests" then renderQuests(d) elseif mode=="key" then renderKey(d) elseif mode=="map" then renderMap(d) else renderBosses(d) end
-    questsBtn:SetActive(mode=="quests"); bossesBtn:SetActive(mode=="bosses"); keyBtn:SetActive(mode=="key"); mapBtn:SetActive(mode=="map")
+    if mode=="quests" then renderQuests(d) elseif mode=="key" then renderKey(d) elseif mode=="map" then renderMap(d) elseif mode=="pets" then renderPets(d) else renderBosses(d) end
+    questsBtn:SetActive(mode=="quests"); bossesBtn:SetActive(mode=="bosses"); keyBtn:SetActive(mode=="key"); mapBtn:SetActive(mode=="map"); petsBtn:SetActive(mode=="pets")
   end
   -- Re-render (cheap: views are cached) whenever the detail page becomes
   -- visible again, so quest states are current after reopening the window.
@@ -1986,6 +2040,7 @@ local function createDungeonPanel(parent)
   questsBtn:SetScript("OnClick",function() mode="quests"; detail._render() end)
   keyBtn:SetScript("OnClick",function() mode="key"; detail._render() end)
   mapBtn:SetScript("OnClick",function() mode="map"; detail._render() end)
+  petsBtn:SetScript("OnClick",function() mode="pets"; detail._render() end)
 
   -- Opens a dungeon's detail page directly (used when the window is opened
   -- inside that dungeon, and by the Armory's "Show" buttons).
@@ -1994,6 +2049,7 @@ local function createDungeonPanel(parent)
   -- questID (6.2.2, Gear Planner, user 09.11.): open the Quests view on that quest, in your faction's list
   UI.OpenDungeon=function(target, bossName, openMode, questID)
     if not target then return end
+    backTo=nil -- a page opened another way (a map entrance) while this one is shown: the normal back button again
     selectedDungeon=target; mode=openMode or "bosses"; browse:Hide(); detail:Show()
     if questID then
       local f=UnitFactionGroup and UnitFactionGroup("player"); if f~="Alliance" and f~="Horde" then f="Alliance" end
